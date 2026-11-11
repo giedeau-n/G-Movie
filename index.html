@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.7</small></div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.8</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -534,13 +534,17 @@ function activate(seg, local) {
   setGain(src, seg.c.vol);
   if (S.playing) src.el.play().catch(() => {});
 }
+/* tijdelijke meting (v1.8): sprongen en verschil tussen muziek en video, zichtbaar onder de muziek */
+setInterval(() => { const m = S.music, d = document.getElementById('mDbg'); if (!m || !d) return; d.textContent = 'Meting: ' + (m.seeks || 0) + ' sprongen · verschil ' + (m.el.currentTime - (m.offset + S.t)).toFixed(2) + ' s · ' + (m.el.paused ? 'pauze' : 'speelt') + (m.el.seeking ? ' · springt' : ''); }, 500);
 function syncMusic(force) {
   const m = S.music; if (!m) return;
   const want = m.offset + S.t;
   if (!S.playing || want >= m.duration || m.hold) { if (!m.el.paused) m.el.pause(); return; }
   // iOS seeks slowly: never start a new seek while one is still running, or the audio turns into a stutter of fragments
   if (m.el.seeking && !force) return;
-  if (force || Math.abs(m.el.currentTime - want) > 0.3) m.el.currentTime = want;
+  // after a jump iOS reports the position late/inexactly: give it 2 s rest and only correct real drift (>0.5 s), else it keeps re-jumping
+  const now = performance.now();
+  if (force || (now - (m.lastSeek || 0) > 2000 && Math.abs(m.el.currentTime - want) > 0.5)) { m.el.currentTime = want; m.lastSeek = now; m.seeks = (m.seeks || 0) + 1; }
   if (m.el.paused) m.el.play().catch(() => {});
   setGain(m, musicEnv(S.t));
 }
@@ -882,6 +886,7 @@ function renderMusic() {
     ${sliderField('Volume', 'm-vol', 0, 1.5, m.vol, 0.05, v => Math.round(v * 100) + '%')}
     ${sliderField('Fade-in', 'm-fi', 0, 3, m.fadeIn, 0.1, v => (+v).toFixed(1) + ' s')}
     ${sliderField('Fade-out', 'm-fo', 0, 5, m.fadeOut, 0.1, v => (+v).toFixed(1) + ' s')}
+    <div class="note" id="mDbg" style="font-family:monospace"></div>
     <div class="note">${m.duration - m.offset < total() ? 'Let op: het nummer is korter dan de video vanaf dit startpunt.' : 'Tip: speel af en schuif "Start in nummer" tot de drop op het juiste beeld valt.'}</div>
     <div class="tools"><label class="btn small">Andere track<input type="file" accept="audio/*,.mp3,.m4a,.wav,.aac" hidden id="musicIn"></label><button class="btn small danger" id="mDel">Verwijder muziek</button></div>`;
 }
