@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.6</small></div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.7</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -537,8 +537,10 @@ function activate(seg, local) {
 function syncMusic(force) {
   const m = S.music; if (!m) return;
   const want = m.offset + S.t;
-  if (!S.playing || want >= m.duration) { if (!m.el.paused) m.el.pause(); return; }
-  if (force || Math.abs(m.el.currentTime - want) > 0.2) m.el.currentTime = want;
+  if (!S.playing || want >= m.duration || m.hold) { if (!m.el.paused) m.el.pause(); return; }
+  // iOS seeks slowly: never start a new seek while one is still running, or the audio turns into a stutter of fragments
+  if (m.el.seeking && !force) return;
+  if (force || Math.abs(m.el.currentTime - want) > 0.3) m.el.currentTime = want;
   if (m.el.paused) m.el.play().catch(() => {});
   setGain(m, musicEnv(S.t));
 }
@@ -996,7 +998,8 @@ $('#musicCard').addEventListener('input', e => {
   const k = map[e.target.id]; if (!k) return;
   m[k] = +e.target.value;
   $('#' + e.target.id + '-o').textContent = k === 'offset' ? fmt(m[k]) : k === 'vol' ? Math.round(m[k] * 100) + '%' : m[k].toFixed(1) + ' s';
-  if (k === 'offset' && S.playing) syncMusic(true);
+  // while dragging "Start in nummer": mute the track and seek once after you let go, instead of on every pixel
+  if (k === 'offset' && S.playing) { m.hold = true; m.el.pause(); clearTimeout(m.holdT); m.holdT = setTimeout(() => { m.hold = false; syncMusic(true); }, 250); }
   renderTimeline();
 });
 $('#musicCard').addEventListener('click', e => {
