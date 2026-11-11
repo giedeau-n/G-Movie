@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie</div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.2</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -589,10 +589,10 @@ function tick() {
 }
 
 /* ---------- loading media ---------- */
-function loadMeta(el, ms = 20000) {
+function loadMeta(el, ms = 0) {
   return new Promise((res, rej) => {
     if (el.readyState >= 1) return res();
-    const t = setTimeout(() => rej(new Error('Kan dit bestand niet openen (laadt niet)')), ms);
+    const t = ms ? setTimeout(() => rej(new Error('Kan dit bestand niet openen (laadt niet)')), ms) : 0;
     el.addEventListener('loadedmetadata', () => { clearTimeout(t); res(); }, { once: true });
     el.addEventListener('error', () => { clearTimeout(t); rej(new Error('Kan dit bestand niet openen')); }, { once: true });
   });
@@ -676,12 +676,13 @@ async function addVideos(files) {
 }
 async function setMusic(file, meta, id = uid()) {
   const name = meta?.name || file.name;
-  try { file = await wavTo16(file); } catch (e) { alertErr(name + ': ' + (e instanceof RangeError ? 'Beschadigd wav-bestand' : e.message)); return; }
+  if (!meta) { const card = $('#musicCard'); if (card) card.innerHTML = '<div class="note">Muziek laden: ' + escapeHtml(name) + ' …</div>'; }
+  try { file = await wavTo16(file); } catch (e) { renderMusic(); alertErr(name + ': ' + (e instanceof RangeError ? 'Beschadigd wav-bestand' : e.message)); return; }
   if (S.music) { dropMedia(S.music); if (!meta && S.projectId) DB.del('files', S.projectId + ':' + S.music.id).catch(() => {}); }
   const url = URL.createObjectURL(file);
-  const el = document.createElement('audio'); el.preload = 'auto'; el.src = url;
+  const el = document.createElement('audio'); el.preload = 'auto'; el.src = url; el.load();
   $('#media').appendChild(el);
-  try { await loadMeta(el); } catch (e) { alertErr(name + ': ' + e.message); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
+  try { await loadMeta(el, 30000); } catch (e) { alertErr(name + ': ' + e.message); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
   S.music = { id, file, url, el, name, duration: el.duration, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}) };
   S.music.duration = el.duration;
   if (actx) routeEl(S.music);
@@ -897,7 +898,7 @@ function setTab(t) {
 document.addEventListener('change', e => {
   const el = e.target;
   if (el.matches('[data-addvideo]')) { addVideos([...el.files]); el.value = ''; }
-  if (el.id === 'musicIn' && el.files[0]) { setMusic(el.files[0]); }
+  if (el.id === 'musicIn' && el.files[0]) { const f = el.files[0]; el.value = ''; setMusic(f); }
 });
 document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => setTab(b.dataset.tab));
 $('#playBtn').onclick = () => S.playing ? pause() : play();
