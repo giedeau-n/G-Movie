@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.3</small></div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.4</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -613,9 +613,9 @@ async function prepareAudio(file) {
   const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const isWav = head.length >= 12 && String.fromCharCode(...head.slice(0, 4)) === 'RIFF' && String.fromCharCode(...head.slice(8, 12)) === 'WAVE';
   if (!isWav) return file;
-  const wav16 = await wavTo16(file); // also validates the file and gives clean PCM for Mediabunny
-  try { const m4a = await wavToM4a(wav16, window.__audioCodecs); if (m4a && m4a.size > 0) return m4a; } catch (e) { console.warn('m4a-omzetting mislukt', e); }
-  return wav16;
+  // Mediabunny reads the original WAV in chunks (24-bit etc. supported), so a full song doesn't need a full extra copy in memory
+  try { const m4a = await wavToM4a(file, window.__audioCodecs); if (m4a && m4a.size > 0) return m4a; } catch (e) { console.warn('m4a-omzetting mislukt', e); }
+  return wavTo16(file);
 }
 /* iOS Safari can't play every WAV (24/32-bit, float, 'extensible' header): rewrite any WAV as plain 16-bit PCM */
 async function wavTo16(file) {
