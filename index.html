@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.5</small></div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.6</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -698,6 +698,11 @@ async function addVideos(files) {
   if (S.activeIdx < 0) S.activeIdx = 0;
   refresh(); seek(S.t); saveSoon();
 }
+/* duration straight from the file: iOS often won't load an <audio> until the user taps play, so don't wait for it */
+async function audioDuration(file) {
+  try { const inp = new window.Mediabunny.Input({ source: new window.Mediabunny.BlobSource(file), formats: window.Mediabunny.ALL_FORMATS }); const d = await inp.computeDuration(); if (isFinite(d) && d > 0) return d; } catch (e) { console.warn('duur bepalen', e); }
+  return null;
+}
 async function setMusic(file, meta, id = uid()) {
   const name = meta?.name || file.name;
   if (!meta && !file.size) { alertErr(name + ': het bestand is leeg (0 MB). Komt het uit Google Drive of iCloud? Sla het eerst op in Bestanden › Op mijn iPhone en kies het daar.'); return; }
@@ -707,9 +712,13 @@ async function setMusic(file, meta, id = uid()) {
   const url = URL.createObjectURL(file);
   const el = document.createElement('audio'); el.preload = 'auto'; el.src = url; el.load();
   $('#media').appendChild(el);
-  try { await loadMeta(el, 30000); } catch (e) { alertErr(name + ': ' + e.message + ' | in: ' + AUDIO_DIAG.in + ', codec: ' + AUDIO_DIAG.codec + ', stap: ' + AUDIO_DIAG.step + ', uit: ' + (file.type || '?') + ' ' + (file.size / 1048576).toFixed(1) + 'MB'); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
-  S.music = { id, file, url, el, name, duration: el.duration, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}) };
-  S.music.duration = el.duration;
+  let dur = await audioDuration(file);
+  if (dur === null) {
+    try { await loadMeta(el, 30000); dur = el.duration; } catch (e) { alertErr(name + ': ' + e.message + ' | in: ' + AUDIO_DIAG.in + ', codec: ' + AUDIO_DIAG.codec + ', stap: ' + AUDIO_DIAG.step + ', uit: ' + (file.type || '?') + ' ' + (file.size / 1048576).toFixed(1) + 'MB'); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
+  } else {
+    loadMeta(el).then(() => { if (S.music?.el === el && isFinite(el.duration) && el.duration > 0) { S.music.duration = el.duration; renderMusic(); renderTimeline(); } }).catch(() => {});
+  }
+  S.music = { id, file, url, el, name, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}), duration: dur };
   if (actx) routeEl(S.music);
   if (!meta) { ensureProject(); storeFile(id, file); saveSoon(); }
   refresh();
