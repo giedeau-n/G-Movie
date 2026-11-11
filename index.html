@@ -139,7 +139,7 @@ textarea{width:100%;min-height:58px;resize:vertical;background:var(--bg);border:
 <body>
 <div class="app">
   <header>
-    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.4</small></div>
+    <div class="brand"><i></i>G-Movie <small style="font-size:.55em;opacity:.6;font-weight:400;letter-spacing:0">v1.5</small></div>
     <div class="hdr-right"><button class="btn small" id="projBtn">Projecten</button><button class="btn small primary" id="newBtn">+ Nieuw</button></div>
   </header>
 
@@ -594,27 +594,31 @@ function loadMeta(el, ms = 0) {
     if (el.readyState >= 1) return res();
     const t = ms ? setTimeout(() => rej(new Error('Kan dit bestand niet openen (laadt niet)')), ms) : 0;
     el.addEventListener('loadedmetadata', () => { clearTimeout(t); res(); }, { once: true });
-    el.addEventListener('error', () => { clearTimeout(t); rej(new Error('Kan dit bestand niet openen')); }, { once: true });
+    el.addEventListener('error', () => { clearTimeout(t); const me = el.error; rej(new Error('Kan dit bestand niet openen' + (me ? ' [mediafout ' + me.code + (me.message ? ': ' + me.message : '') + ']' : ''))); }, { once: true });
   });
 }
 /* iOS Safari refuses many WAVs in <audio>: convert WAV to AAC (.m4a) with the built-in Mediabunny; fall back to 16-bit WAV */
 async function wavToM4a(file, codecs = ['aac']) {
   const MBx = window.Mediabunny;
   const codec = await MBx.getFirstEncodableAudioCodec(codecs, { numberOfChannels: 2, sampleRate: 48000 }).catch(() => null);
+  AUDIO_DIAG.codec = codec || 'geen';
   if (!codec) return null;
   const input = new MBx.Input({ source: new MBx.BlobSource(file), formats: MBx.ALL_FORMATS });
   const output = new MBx.Output({ format: new MBx.Mp4OutputFormat(), target: new MBx.BufferTarget() });
   const conv = await MBx.Conversion.init({ input, output, audio: { codec, bitrate: MBx.QUALITY_HIGH } });
-  if (!conv.isValid) return null;
+  if (!conv.isValid) { AUDIO_DIAG.step = 'conversie ongeldig'; return null; }
   await conv.execute();
   return new Blob([output.target.buffer], { type: 'audio/mp4' });
 }
+const AUDIO_DIAG = {};
 async function prepareAudio(file) {
+  Object.assign(AUDIO_DIAG, { in: (file.type || '?') + ' ' + (file.size / 1048576).toFixed(1) + 'MB', codec: '-', step: '-' });
   const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const isWav = head.length >= 12 && String.fromCharCode(...head.slice(0, 4)) === 'RIFF' && String.fromCharCode(...head.slice(8, 12)) === 'WAVE';
   if (!isWav) return file;
   // Mediabunny reads the original WAV in chunks (24-bit etc. supported), so a full song doesn't need a full extra copy in memory
-  try { const m4a = await wavToM4a(file, window.__audioCodecs); if (m4a && m4a.size > 0) return m4a; } catch (e) { console.warn('m4a-omzetting mislukt', e); }
+  try { const m4a = await wavToM4a(file, window.__audioCodecs); if (m4a && m4a.size > 0) { AUDIO_DIAG.step = 'm4a'; return m4a; } } catch (e) { AUDIO_DIAG.step = 'm4a-fout: ' + (e.message || e); console.warn('m4a-omzetting mislukt', e); }
+  AUDIO_DIAG.step += ' → wav16';
   return wavTo16(file);
 }
 /* iOS Safari can't play every WAV (24/32-bit, float, 'extensible' header): rewrite any WAV as plain 16-bit PCM */
@@ -696,13 +700,14 @@ async function addVideos(files) {
 }
 async function setMusic(file, meta, id = uid()) {
   const name = meta?.name || file.name;
+  if (!meta && !file.size) { alertErr(name + ': het bestand is leeg (0 MB). Komt het uit Google Drive of iCloud? Sla het eerst op in Bestanden › Op mijn iPhone en kies het daar.'); return; }
   if (!meta) { const card = $('#musicCard'); if (card) card.innerHTML = '<div class="note">Muziek laden: ' + escapeHtml(name) + ' …</div>'; }
   try { file = await prepareAudio(file); } catch (e) { renderMusic(); alertErr(name + ': ' + (e instanceof RangeError ? 'Beschadigd wav-bestand' : e.message)); return; }
   if (S.music) { dropMedia(S.music); if (!meta && S.projectId) DB.del('files', S.projectId + ':' + S.music.id).catch(() => {}); }
   const url = URL.createObjectURL(file);
   const el = document.createElement('audio'); el.preload = 'auto'; el.src = url; el.load();
   $('#media').appendChild(el);
-  try { await loadMeta(el, 30000); } catch (e) { alertErr(name + ': ' + e.message); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
+  try { await loadMeta(el, 30000); } catch (e) { alertErr(name + ': ' + e.message + ' | in: ' + AUDIO_DIAG.in + ', codec: ' + AUDIO_DIAG.codec + ', stap: ' + AUDIO_DIAG.step + ', uit: ' + (file.type || '?') + ' ' + (file.size / 1048576).toFixed(1) + 'MB'); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
   S.music = { id, file, url, el, name, duration: el.duration, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}) };
   S.music.duration = el.duration;
   if (actx) routeEl(S.music);
