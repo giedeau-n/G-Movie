@@ -589,12 +589,50 @@ function tick() {
 }
 
 /* ---------- loading media ---------- */
-function loadMeta(el) {
+function loadMeta(el, ms = 20000) {
   return new Promise((res, rej) => {
     if (el.readyState >= 1) return res();
-    el.addEventListener('loadedmetadata', () => res(), { once: true });
-    el.addEventListener('error', () => rej(new Error('Kan dit bestand niet openen')), { once: true });
+    const t = setTimeout(() => rej(new Error('Kan dit bestand niet openen (laadt niet)')), ms);
+    el.addEventListener('loadedmetadata', () => { clearTimeout(t); res(); }, { once: true });
+    el.addEventListener('error', () => { clearTimeout(t); rej(new Error('Kan dit bestand niet openen')); }, { once: true });
   });
+}
+/* iOS Safari can't play every WAV (24/32-bit, float, 'extensible' header): rewrite any WAV as plain 16-bit PCM */
+async function wavTo16(file) {
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  const tag = (b, o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+  if (head.length < 12 || tag(head, 0) !== 'RIFF' || tag(head, 8) !== 'WAVE') return file;
+  const buf = await file.arrayBuffer(), dv = new DataView(buf), b = new Uint8Array(buf);
+  let fmt = null, dataOff = -1, dataLen = 0;
+  for (let o = 12; o + 8 <= buf.byteLength;) {
+    const id = tag(b, o), len = dv.getUint32(o + 4, true), body = o + 8;
+    if (id === 'fmt ') {
+      let code = dv.getUint16(body, true);
+      if (code === 0xFFFE && len >= 26) code = dv.getUint16(body + 24, true);
+      fmt = { code, ch: dv.getUint16(body + 2, true), sr: dv.getUint32(body + 4, true), bits: dv.getUint16(body + 14, true) };
+    } else if (id === 'data') { dataOff = body; dataLen = Math.min(len, buf.byteLength - body); break; }
+    o = body + len + (len & 1);
+  }
+  if (!fmt || dataOff < 0 || !fmt.ch) throw new Error('Onbekend wav-formaat');
+  const { code, ch, sr, bits } = fmt, bps = bits / 8;
+  const read = code === 3 ? (bits === 32 ? o => dv.getFloat32(o, true) : bits === 64 ? o => dv.getFloat64(o, true) : null)
+    : code === 1 ? (bits === 8 ? o => (dv.getUint8(o) - 128) / 128 : bits === 16 ? o => dv.getInt16(o, true) / 32768
+      : bits === 24 ? o => ((dv.getUint8(o) | dv.getUint8(o + 1) << 8 | dv.getInt8(o + 2) << 16)) / 8388608
+      : bits === 32 ? o => dv.getInt32(o, true) / 2147483648 : null) : null;
+  if (!read) throw new Error('Wav-formaat niet ondersteund (' + bits + '-bit, code ' + code + ')');
+  if (code === 1 && bits === 16 && file.type === 'audio/wav') return file; // already fine
+  const n = Math.floor(dataLen / bps);
+  const out = new ArrayBuffer(44 + n * 2), w = new DataView(out);
+  const str = (o, x) => { for (let i = 0; i < 4; i++) w.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, 'RIFF'); w.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  w.setUint32(16, 16, true); w.setUint16(20, 1, true); w.setUint16(22, ch, true); w.setUint32(24, sr, true);
+  w.setUint32(28, sr * ch * 2, true); w.setUint16(32, ch * 2, true); w.setUint16(34, 16, true);
+  str(36, 'data'); w.setUint32(40, n * 2, true);
+  for (let i = 0, o = dataOff, q = 44; i < n; i++, o += bps, q += 2) {
+    const v = read(o) * 32767 + (Math.random() - Math.random()) * 0.5; // light TPDF dither
+    w.setInt16(q, v > 32767 ? 32767 : v < -32768 ? -32768 : Math.round(v), true);
+  }
+  return new Blob([out], { type: 'audio/wav' });
 }
 async function makeThumb(url, at) {
   try {
@@ -637,12 +675,14 @@ async function addVideos(files) {
   refresh(); seek(S.t); saveSoon();
 }
 async function setMusic(file, meta, id = uid()) {
+  const name = meta?.name || file.name;
+  try { file = await wavTo16(file); } catch (e) { alertErr(name + ': ' + (e instanceof RangeError ? 'Beschadigd wav-bestand' : e.message)); return; }
   if (S.music) { dropMedia(S.music); if (!meta && S.projectId) DB.del('files', S.projectId + ':' + S.music.id).catch(() => {}); }
   const url = URL.createObjectURL(file);
   const el = document.createElement('audio'); el.preload = 'auto'; el.src = url;
   $('#media').appendChild(el);
-  try { await loadMeta(el); } catch (e) { alertErr(e.message); el.remove(); S.music = null; renderMusic(); return; }
-  S.music = { id, file, url, el, name: meta?.name || file.name, duration: el.duration, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}) };
+  try { await loadMeta(el); } catch (e) { alertErr(name + ': ' + e.message); el.remove(); URL.revokeObjectURL(url); S.music = null; renderMusic(); return; }
+  S.music = { id, file, url, el, name, duration: el.duration, offset: 0, vol: 1, fadeIn: 0, fadeOut: 1.5, ...(meta || {}) };
   S.music.duration = el.duration;
   if (actx) routeEl(S.music);
   if (!meta) { ensureProject(); storeFile(id, file); saveSoon(); }
@@ -844,7 +884,7 @@ function renderExportCtl() {
   mk('#fitCtl', 'fit', [['cover', 'Bijsnijden'], ['contain', 'Passend (balken)']]);
   mk('#resCtl', 'res', [[1080, '1080p'], [720, '720p']]);
 }
-function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function setTab(t) {
   S.tab = t; S.dirty = true;
   document.querySelectorAll('[data-tab]').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t));
